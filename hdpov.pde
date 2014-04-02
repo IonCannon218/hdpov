@@ -17,6 +17,7 @@
 **/
 
 /**
+ ** ORIGINAL CODE CREDIT:
  ** Author: Giles F. Hall 
  ** Email: <ghall -at- csh (dot) rit (dot) edu>
  **/
@@ -29,6 +30,7 @@
 #include                <avr/io.h>
 #include                <avr/interrupt.h>
 #include                <util/delay.h>
+//#include                <MemoryFree.h>
 
 // arduino redefines int, which bugs out stdio.h (needed for sscanf)
 // see: http://www.arduino.cc/cgi-bin/yabb2/YaBB.pl?num=1207028702/3
@@ -38,14 +40,15 @@
 // The number of "pie slices" that make up a single image around the platter
 #define DIVISIONS       0xFF
 
-// Red pin, on PORTD
-#define RED             3
 
 // Green Pin, on PORTD
 #define GRN             4
 
+// Red pin, on PORTD
+#define RED             5
+
 // Blue pin, on PORTD
-#define BLU             5
+#define BLU             6
 
 // Macro used to communicate serial status
 #define OK              1
@@ -98,6 +101,24 @@ volatile int page_visible;
 // A flag representing the need for the pages to be flipped
 volatile unsigned char page_flip_flag;
 
+// Clock value variables
+byte c_hour = 1;
+byte c_minute = 58;
+byte c_second = 0;
+long clock_timer = 0;
+byte clockColors = 0;
+
+// Demo mode variables
+byte demo_mode = 1;
+byte demoRed = 0;
+byte demoGrn = 96;
+byte demoBlu = 160;
+byte spinSlice = 0;
+boolean demoCycleMode = true;
+int
+
+demoCycle = 0;
+
 // The double buffered frame buffer
 unsigned char FrameBuffer[PAGES][DIVISIONS];
 
@@ -149,6 +170,12 @@ void __inline__ write_page(unsigned char slice, unsigned char val)
     FrameBuffer[page_hidden][slice] = val;
 }
 
+// read a value from the hidden page
+int __inline__ read_page(unsigned char slice)
+{
+    return FrameBuffer[page_hidden][slice];
+}
+
 // clear the hidden page
 void clear_page(void)
 {
@@ -178,38 +205,41 @@ void __inline__ flip_to_next_page(void)
 // Simple test pattern displaying all the available colors, evenly spaced
 void InitTestPattern1(void)
 {
-  int x;
-  for(x = 0; x < divisions; x++)
-  {
-      switch (x / (divisions / 8))
-      {
-        case 0:
-          write_page(x, RGB(0,0,0));
-          break;  
-        case 1:
-          write_page(x, RGB(1,0,0));
-          break;
-        case 2:
-          write_page(x, RGB(0,1,0));
-          break;
-        case 3:
-          write_page(x, RGB(0,0,1));
-          break;
-        case 4:
-          write_page(x, RGB(1,1,0));
-          break;  
-        case 5:
-          write_page(x, RGB(1,0,1));
-          break;  
-        case 6:
-          write_page(x, RGB(0,1,1));
-          break;  
-        case 7:
-        default:
-          write_page(x, RGB(1,1,1));
-          break;
-      }
+    clear_page();
+    int x;
+    
+    for(x = 0; x < divisions; x++)
+    {
+        switch (x / (divisions / 8))
+        {
+          case 0:
+            write_page(x, RGB(0,0,0));
+            break;  
+          case 1:
+            write_page(x, RGB(1,0,0));
+            break;
+          case 2:
+            write_page(x, RGB(0,1,0));
+            break;
+          case 3:
+            write_page(x, RGB(0,0,1));
+            break;
+          case 4:
+            write_page(x, RGB(1,1,0));
+            break;  
+          case 5:
+            write_page(x, RGB(1,0,1));
+            break;  
+          case 6:
+            write_page(x, RGB(0,1,1));
+            break;  
+          case 7:
+          default:
+            write_page(x, RGB(1,1,1));
+            break;
+        }
     }
+    flip_page();
 }
 
 // Simple test pattern displaying all the available drawable slices.
@@ -245,7 +275,7 @@ void InitTestPattern2(void)
           write_page(x, RGB(1,1,1));
           break;
       }
-    }
+  }
 }
 
 // Go through all pages of the frame buffer, and set them to 0
@@ -339,21 +369,36 @@ void report_status_to_serial(void)
       rpm = (int)(((float)FREQ_DIV_8) / ((float)period) * 60.0);
   }
   Serial.print("Revolutions / Minute: ");
-  Serial.println(rpm, DEC);
+    Serial.println(rpm, DEC);
   Serial.print("Ticks / Revolution: ");
-  Serial.println(period, DEC);
+    Serial.println(period, DEC);
   Serial.print("OCR0A: ");
-  Serial.println(OCR0A, DEC);
+    Serial.println(OCR0A, DEC);
   Serial.print("Divisons: ");
-  Serial.println(divisions, DEC);
+    Serial.println(divisions, DEC);
   Serial.print("Current Page: ");
-  Serial.println((!(page_hidden)), DEC);
+    Serial.println((!(page_hidden)), DEC);
+  Serial.print("Time: ");
+    Serial.print(c_hour, DEC);
+    Serial.print(":");
+    Serial.print(c_minute, DEC);
+    Serial.print(":");
+    Serial.print(c_second, DEC);
+    Serial.print(":");
+    Serial.println(clock_timer/2000, DEC);
+  Serial.print("Demo mode: ");
+    Serial.println(demo_mode, DEC);
+  Serial.print("Demo cycle: ");
+    Serial.println(demoCycleMode, DEC);
+  Serial.print("Demo cycle count: ");
+    Serial.println(demoCycle, DEC);
+    
   Serial.print("Red: 0x");
-  Serial.println(_BV(RED), HEX);
+    Serial.println(_BV(RED), HEX);
   Serial.print("Green: 0x");
-  Serial.println(_BV(GRN), HEX);
+    Serial.println(_BV(GRN), HEX);
   Serial.print("Blue: 0x");
-  Serial.println(_BV(BLU), HEX);
+    Serial.println(_BV(BLU), HEX);
 }
 
 // Read the entire visible page to the serial port, printing
@@ -394,6 +439,7 @@ int read_byte(void)
     return ret;
 }
 
+/* MARKED FOR DELETION
 // read an entire page from the serial port and write it to the framebuffer
 int write_page_from_serial(void)
 {
@@ -408,7 +454,7 @@ int write_page_from_serial(void)
     }
 
     return retval;
-}
+}*/
 
 /**
  ** Setup
@@ -459,11 +505,119 @@ void RunStartupDisplay(void)
     flip_page();
 }
 
+void set_time(void)
+{
+    // set hour
+    int val = read_byte();
+    if (val >= 0 && val <= 24)
+        c_hour = val;
+    
+    // set minute
+    val = read_byte();
+    if (val >= 0 && val <= 59)
+        c_minute = val;
+    
+    // set second
+    val = read_byte();
+    if (val >= 0 && val <= 59)
+        c_second = val;
+}
+
+void update_time(void)
+{
+    c_second++;
+    
+    if (c_second >= 60)
+    {
+      c_second = 0;
+      c_minute++;
+    }
+    
+    if (c_minute >= 60)
+    {
+      c_minute = 0;
+      c_hour++;
+    }
+    
+    if (c_hour >= 12)
+    {
+      c_hour = 0;
+    }   
+}
+
+void change_clock(void)
+{
+    // change clock colors
+    
+}
+
+void update_clock(void)
+{
+    int x;
+    
+    // clear the hidden framebuffer page
+    clear_page();
+    
+    // draw the background
+    for(int x = 0; x <= divisions; x++)
+    {
+        write_page(x, RGB(0,0,0));
+    }
+    
+    // draw the ticks
+    float div = divisions / 12;
+    for(int x = divisions-1; x >= 0; x -= div)
+    {
+        write_page(x, RGB(1,1,1));
+    }
+    
+    // draw hour hand
+    float xMin = divisions - (float)(divisions / 12.0) * (float)c_hour;
+    float xMax = divisions - (float)(divisions / 12.0) * (float)c_hour + 1;
+    x = (int)(xMin + ((xMax - xMin) * (c_minute / 60.0)));
+    for (int i = -2; i < 3; i++)  // width of 5
+    {
+        write_page(x+i, RGB(1,0,0));
+    }
+    
+    // draw minute hand
+    x = divisions - (int)((float)(divisions / 60.0) * (float)c_minute);
+    for (int i = -1; i < 2; i++)  // width of 3
+    {
+        if (read_page(x+i) == RGB(1,0,0))
+            write_page(x+i, RGB(1,1,0));
+        else
+            write_page(x+i, RGB(0,1,0));
+    }
+    
+    // draw second hand
+    x = divisions - (int)((float)(divisions / 60.0) * (float)c_second);
+    for (int i = -1; i < 2; i++)  // width of 3
+    {
+        if (read_page(x+i) == RGB(1,0,0))
+            write_page(x+i, RGB(1,1,1));
+        else
+            write_page(x+i, RGB(0,1,1));
+    }
+    
+    // draw milliseconds hand
+    //x = divisions - (int)((float)(divisions / 2000000.0) * (float)clock_timer);
+    //write_page(x, RGB(1,1,1));
+    
+    // draw slice 0
+    //write_page(0, RGB(1,1,1));
+    
+    flip_page();
+}
+
 // Top level setup, called by the Arduino core
 void setup(void)
 {
     SetupHardware();
     RunStartupDisplay();
+    //InitTestPattern1();
+    //flip_page();
+    //delay(1000);
 }
 
 /**
@@ -476,56 +630,225 @@ void loop(void)
     int cmd;
     int slice, value;
     int okval = OK;
-
-    Serial.print("~ ");
-    wait_for_serial_input();
-
-    cmd = Serial.read();
-    Serial.println("");
-    switch(cmd)
-    {
-        /* report status */
-        case 'r':
-            report_status_to_serial();
-            break;
-        /* flip to the next page */
-        case 'f':
-            flip_page();
-            break;
-        /* write a slice */
-        case 's':
-            slice = read_byte();
-            value = read_byte();
-            write_page(slice, value);
-            break;
-        /* upload hidden page */
-        case 'h':
-            okval = write_page_from_serial();
-            break;
-        /* download visible page */
-        case 'v':
-            read_page_to_serial(!page_hidden);
-            break;
-        /* setup test pattern1 */
-        case '1':
-            InitTestPattern1();
-            break;
-        /* setup test pattern2 */
-        case '2':
-            InitTestPattern2();
-            break;
-        /* clear page */
-        case 'c':
-            clear_page();
-            break;
-        default:
-            Serial.print("Unknown command: ");
-            Serial.println(cmd, BYTE);
-            break;
+    
+    // Cycle through the demo modes
+    if (demoCycleMode == true) {
+      if (demo_mode = 1)
+          demo_mode++;
+      if (demoCycle >= 5000) {
+        demo_mode++;
+        if (demo_mode >= 5)
+          demo_mode = 0;
+        demoCycle = 0;
+      }
     }
-    Serial.print("> ");
-    Serial.println(okval, DEC);
-    Serial.flush();
+    
+    //Serial.print("~ ");
+    //wait_for_serial_input();
+    
+    // if there is no input then skip
+    if (Serial.peek() != -1)
+    {
+        cmd = Serial.read();
+        Serial.println("");
+        switch(cmd)
+        {
+            // report status
+            case 'r':
+                report_status_to_serial();
+                break;
+            // flip to the next page
+            /*case 'f':
+                flip_page();
+                break;
+            // write a slice
+            case 's':
+                slice = read_byte();
+                value = read_byte();
+                write_page(slice, value);
+                break;
+            // upload hidden page
+            case 'h':
+                okval = write_page_from_serial();
+                break;
+            // download visible page
+            case 'v':
+                read_page_to_serial(!page_hidden);
+                break;*/
+            case 't':
+                //set_time();
+                c_minute += 1;
+                break;
+            case 'd':
+                demo_mode++;
+                if (demo_mode >= 5)
+                    demo_mode = 0;
+                break;
+            case 'c':
+                if (demoCycleMode == true)
+                    demoCycleMode = false;
+                else if (demoCycleMode == false)
+                    demoCycleMode = true;
+                break;
+            // setup test pattern1
+            case '1':
+                InitTestPattern1();
+                break;
+            // setup test pattern2
+            case '2':
+                InitTestPattern2();
+                break;
+            case 'j':
+                clockColors++;
+                change_clock();
+                InitTestPattern1();
+                break;
+            case 'k':
+                clockColors--;
+                change_clock();
+                InitTestPattern1();
+                break;
+            default:
+                Serial.print("Unknown command: ");
+                //Serial.println(cmd, BYTE);
+                break;
+        }
+        Serial.print("> ");
+        Serial.println(okval, DEC);
+        Serial.flush();
+    }
+    
+    if (demo_mode == 0)
+        // draw clock
+        update_clock();
+    else if (demo_mode == 1)
+    {
+        // draw 8 color slices
+        InitTestPattern1();
+        //flip_page();
+    }
+    /*else if (demo_mode == 2)
+    {
+        // draw 255 color slices
+        InitTestPattern2();
+        flip_page();
+    }*/
+    
+    else if (demo_mode == 2)
+    {
+        // RGB slices overlapping spin
+        clear_page();
+        demoRed += 3;
+        demoGrn -= 2;
+        demoBlu += 2;
+        
+        // draw red
+        for(int i = 0; i < 70; i++)
+        {
+            int slice = demoRed + i;
+            write_page(slice % divisions, RGB(1,0,0));
+        }
+        
+        // draw green
+        for(int i = 0; i < 55; i++)
+        {
+            int slice = demoGrn - i;
+            if (read_page(slice % divisions) == RGB(1,0,0))
+                write_page(slice % divisions, RGB(1,1,0));
+            else
+                write_page(slice % divisions, RGB(0,1,0));
+        }
+        
+        // draw blue
+        for(int i = 0; i < 40; i++)
+        {
+            int slice = demoBlu + i;
+            if (read_page(slice % divisions) == RGB(1,0,0))
+                write_page(slice % divisions, RGB(1,0,1));
+            else if (read_page(slice % divisions) == RGB(0,1,0))
+                write_page(slice % divisions, RGB(0,1,1));
+            else if (read_page(slice % divisions) == RGB(1,1,0))
+                write_page(slice % divisions, RGB(1,1,1));
+            else
+                write_page(slice % divisions, RGB(0,0,1));
+        }
+        
+        flip_page();
+    }
+    
+    else if (demo_mode == 3)
+    {
+        // random color slices
+        clear_page();
+        
+        for(int x = 0; x < divisions; x += (divisions / 16))
+        {
+            byte randRed = random(0,2);
+            byte randGrn = random(0,2);
+            byte randBlu = random(0,2);
+            byte randBlk = random(0,2);
+            for(int i = 0; i < divisions / 16; i++)
+            {
+                if (randBlk == 0)
+                    write_page(x+i, RGB(0,0,0));
+                else
+                    write_page(x+i, RGB(randRed, randGrn, randBlu));
+            }
+        }
+        
+        flip_page();
+    }
+    
+    /*else if (demo_mode == 5)
+    {
+        // slices spinning random color
+        clear_page();
+        byte divisor = 8;
+        
+        spinSlice++;
+        if (spinSlice > divisor)
+            spinSlice = 0;
+        
+        byte randRed = random(0,2);
+        byte randGrn = random(0,2);
+        byte randBlu = random(0,2);
+        for(int i = 0; i < divisions / divisor; i++)
+        {
+            int x = (divisions / divisor) * spinSlice;
+            write_page(x+i, RGB(randRed, randGrn, randBlu));
+        }
+        
+        flip_page();
+    }*/
+    
+    else if (demo_mode == 4)
+    {
+        // full random color
+        clear_page();
+        
+        for(int x = 0; x < divisions; x += (divisions ))
+        {
+            byte randRed = random(0,2);
+            byte randGrn = random(0,2);
+            byte randBlu = random(0,2);
+            byte randBlk = random(0,2);
+            for(int i = 0; i < divisions; i++)
+            {
+                if (randBlk == 0)
+                    write_page(x+i, RGB(0,0,0));
+                else
+                    write_page(x+i, RGB(randRed, randGrn, randBlu));
+            }
+        }
+        
+        flip_page();
+    }
+    else
+    {
+        
+    }
+    
+    demoCycle++;
 }
 
 
@@ -543,6 +866,15 @@ ISR(INT0_vect)
 {
   // Capture the 16bit count on timer1, this represents one revolution
   period = TCNT1;
+  
+  // Clock timer
+  clock_timer += period;
+  if (clock_timer >= 2000000)
+  {
+      update_time();
+      clock_timer = 0;
+  }
+  
   // If the period is shorter than our threshold, don't do anything
   if(period < SPURIOUS_INT)
   {
@@ -561,6 +893,7 @@ ISR(INT0_vect)
   OCR0A = (period / divisions);
   // Set our current slice to 1, since we just drew slice 0
   current_slice = 1;
+  
 }
 
 // This interrupt is called every time timer0 counts up to the 8bit value
